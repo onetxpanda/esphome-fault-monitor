@@ -1,0 +1,139 @@
+# Host-platform integration test for fault_monitor.
+# A scripted scenario drives fake inputs one step per second; the test runner
+# (tests/host/run.py) checks the log for the expected transitions and reports.
+
+esphome:
+  name: fault-monitor-test
+
+host:
+
+logger:
+  level: DEBUG
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+    components: [fault_monitor]
+
+globals:
+  - id: step
+    type: int
+    initial_value: "0"
+  - id: temp            # simulated enclosure temperature (C); NaN = no reading
+    type: float
+    initial_value: "25.0"
+  - id: bad_reading     # simulated bus fault
+    type: bool
+    initial_value: "false"
+  - id: heater_on
+    type: bool
+    initial_value: "true"
+  - id: on_raise_count
+    type: int
+    initial_value: "0"
+
+fault_monitor:
+  id: monitor
+  update_interval: 1s
+  report:
+    name: "Faults"
+    id: report
+  critical_report:
+    name: "Critical Faults"
+    id: critical_report
+  summary:
+    name: "Fault Summary"
+    id: summary
+  faults:
+    # Hysteresis + interlock: raise at >= 35, clear below 32.2.
+    - id: f_overheat
+      code: enclosure_overheat
+      description: "Enclosure at or above 35C; heater forced off"
+      severity: critical
+      condition: |-
+        if (std::isnan(id(temp))) return {};
+        return id(temp) >= 35.0f;
+      clear_condition: |-
+        if (std::isnan(id(temp))) return {};
+        return id(temp) < 32.2f;
+      on_raise:
+        - lambda: 'id(on_raise_count)++;'
+      while_active:
+        - lambda: |-
+            if (id(heater_on)) { id(heater_on) = false; ESP_LOGI("test", "interlock: heater forced off"); }
+      binary_sensor:
+        name: "Overheat"
+        id: overheat_bs
+    # Time-qualified, unknown = hold.
+    - id: f_cold
+      code: enclosure_too_cold
+      description: "Below 21C for 3 s"
+      severity: critical
+      raise_after: 3s
+      clear_after: 2s
+      condition: |-
+        if (std::isnan(id(temp))) return {};
+        return id(temp) < 21.0f;
+    # Unknown = raise (fail-safe): no reading counts as the fault.
+    - id: f_no_temp
+      code: no_temperature
+      description: "No temperature reading"
+      severity: warning
+      raise_after: 2s
+      unknown: raise
+      condition: |-
+        if (std::isnan(id(temp))) return {};
+        return false;
+    # Latching; persisted across reboot.
+    - id: f_bus
+      code: power_meter_fault
+      description: "Bus returned implausible readings"
+      severity: warning
+      latch: true
+      startup_delay: 2s
+      condition: 'return id(bad_reading);'
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          int s = ++id(step);
+          switch (s) {
+            case 3:  id(temp) = 36.0f; ESP_LOGI("test", "STEP %d: overheat", s); break;
+            case 5:  id(heater_on) = true; ESP_LOGI("test", "STEP %d: thermostat turns heater back on", s); break;
+            case 7:  id(temp) = 33.0f; ESP_LOGI("test", "STEP %d: inside hysteresis band", s); break;
+            case 9:  id(temp) = 31.0f; ESP_LOGI("test", "STEP %d: below clear threshold", s); break;
+            case 11: id(temp) = 20.0f; ESP_LOGI("test", "STEP %d: cold", s); break;
+            case 12: id(temp) = NAN;   ESP_LOGI("test", "STEP %d: reading lost (hold cancels pending cold)", s); break;
+            case 13: id(temp) = 20.0f; ESP_LOGI("test", "STEP %d: cold again", s); break;
+            case 20: id(temp) = 25.0f; ESP_LOGI("test", "STEP %d: normal", s); break;
+            case 24: id(temp) = NAN;   ESP_LOGI("test", "STEP %d: reading lost for good", s); break;
+            case 28: id(temp) = 25.0f; id(bad_reading) = true; ESP_LOGI("test", "STEP %d: bus fault", s); break;
+            case 30: id(bad_reading) = false; ESP_LOGI("test", "STEP %d: bus fault gone (latched)", s); break;
+            default: break;
+          }
+          if (s == 33) ESP_LOGI("test", "STEP %d: acknowledge", s);
+      - if:
+          condition:
+            lambda: 'return id(step) == 33;'
+          then:
+            - fault_monitor.acknowledge:
+                id: monitor
+                code: power_meter_fault
+      - if:
+          condition:
+            fault_monitor.is_active: f_overheat
+          then:
+            - lambda: 'ESP_LOGD("test", "condition: overheat active");'
+      - if:
+          condition:
+            fault_monitor.any_active:
+              id: monitor
+              severity: critical
+          then:
+            - lambda: 'ESP_LOGD("test", "condition: some critical active");'
+      - lambda: |-
+          ESP_LOGI("test", "STATE step=%d report=%s critical=%s summary=%s heater=%d raises=%d",
+                   id(step), id(report).state.c_str(), id(critical_report).state.c_str(),
+                   id(summary).state.c_str(), (int) id(heater_on), id(on_raise_count));

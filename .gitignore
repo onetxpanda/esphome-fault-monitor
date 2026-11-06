@@ -1,0 +1,4 @@
+.esphome/
+tests/host/*.log
+tests/unit/test_fault_logic
+__pycache__/

@@ -1,0 +1,7 @@
+duplicate_code.yaml|Duplicate fault code 'a_fault'
+bad_code.yaml|Fault codes must start with a lowercase letter
+reserved_code.yaml|'ok' is reserved
+bad_severity.yaml|Unknown value 'fatal'
+raise_after_too_short.yaml|is shorter than the monitor's update_interval
+empty_description.yaml|description must not be empty
+report_too_long.yaml|Home Assistant allows 255

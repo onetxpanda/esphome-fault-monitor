@@ -1,0 +1,16 @@
+esphome:
+  name: invalid-test
+host:
+logger:
+external_components:
+  - source: {type: local, path: ../../components}
+    components: [fault_monitor]
+fault_monitor:
+  update_interval: 1s
+  faults:
+    - {code: ffffffffffffffffffffffffffffffffffffffffffff_01, description: "x", severity: warning, condition: "return false;"}
+    - {code: ffffffffffffffffffffffffffffffffffffffffffff_02, description: "x", severity: warning, condition: "return false;"}
+    - {code: ffffffffffffffffffffffffffffffffffffffffffff_03, description: "x", severity: warning, condition: "return false;"}
+    - {code: ffffffffffffffffffffffffffffffffffffffffffff_04, description: "x", severity: warning, condition: "return false;"}
+    - {code: ffffffffffffffffffffffffffffffffffffffffffff_05, description: "x", severity: warning, condition: "return false;"}
+    - {code: ffffffffffffffffffffffffffffffffffffffffffff_06, description: "x", severity: warning, condition: "return false;"}
