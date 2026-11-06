@@ -63,13 +63,22 @@ void FaultMonitor::setup() {
       }
     }
   }
+  // Constant entities: the version and each fault's user-facing message.
+#ifdef USE_TEXT_SENSOR
+  if (this->version_sensor_ != nullptr)
+    this->version_sensor_->publish_state(this->version_);
+  for (Fault *f : this->faults_) {
+    if (f->message_sensor_ != nullptr)
+      f->message_sensor_->publish_state(f->get_message());
+  }
+#endif
   // Publish the restored state right away; a full evaluation follows on the
   // first update.
   this->publish_(true);
 }
 
 void FaultMonitor::dump_config() {
-  ESP_LOGCONFIG(TAG, "Fault monitor: %u faults", (unsigned) this->faults_.size());
+  ESP_LOGCONFIG(TAG, "Fault monitor v%s: %u faults", this->version_, (unsigned) this->faults_.size());
   LOG_UPDATE_INTERVAL(this);
   for (const Fault *f : this->faults_) {
     const Timing &t = f->logic_.timing();
@@ -207,7 +216,22 @@ void FaultMonitor::publish_(bool force) {
       this->summary_->publish_state(s);
   }
 #endif
+#ifdef USE_BINARY_SENSOR
+  if (this->ack_needed_ != nullptr) {
+    bool latched = this->any_latched();
+    if (force || !this->ack_needed_->has_state() || this->ack_needed_->state != latched)
+      this->ack_needed_->publish_state(latched);
+  }
+#endif
   this->published_once_ = true;
+}
+
+bool FaultMonitor::any_latched() const {
+  for (const Fault *f : this->faults_) {
+    if (f->is_latched())
+      return true;
+  }
+  return false;
 }
 
 bool FaultMonitor::acknowledge(const std::string &code) {

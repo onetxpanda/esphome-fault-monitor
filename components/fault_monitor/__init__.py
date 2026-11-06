@@ -11,8 +11,10 @@ from esphome.components import binary_sensor, text_sensor
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
+    CONF_NAME,
     CONF_TRIGGER_ID,
     DEVICE_CLASS_PROBLEM,
+    DEVICE_CLASS_SAFETY,
     ENTITY_CATEGORY_DIAGNOSTIC,
 )
 
@@ -50,6 +52,18 @@ CONF_BINARY_SENSOR = "binary_sensor"
 CONF_REPORT = "report"
 CONF_CRITICAL_REPORT = "critical_report"
 CONF_SUMMARY = "summary"
+CONF_TITLE = "title"
+CONF_MESSAGE = "message"
+CONF_FAULT_ENTITIES = "fault_entities"
+CONF_ACKNOWLEDGEMENT_NEEDED = "acknowledgement_needed"
+CONF_VERSION = "version"
+# Generated per-fault entity configs (filled in by validation, not by users).
+CONF_AUTO_STATUS = "_auto_status_sensor"
+CONF_AUTO_MESSAGE = "_auto_message_sensor"
+
+# Reported by the optional `version` text sensor so consumers (e.g. Home
+# Assistant) can tell which contract a device implements.
+COMPONENT_VERSION = "1.1.0"
 
 SEVERITIES = {
     "warning": Severity.WARNING,
@@ -67,6 +81,9 @@ MAX_FAULTS = 32  # latched-fault persistence uses a 32-bit mask
 CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 RESERVED_CODES = {"ok", "unknown", "unavailable", "none", "warning", "critical"}
 MAX_DESCRIPTION_LEN = 200
+MAX_TITLE_LEN = 60
+# The message is published as an entity state; Home Assistant allows 255.
+MAX_MESSAGE_LEN = 255
 
 
 def validate_code(value):
@@ -90,11 +107,35 @@ def validate_description(value):
     return value
 
 
+def validate_title(value):
+    value = cv.string_strict(value)
+    if not value.strip():
+        raise cv.Invalid("title must not be empty")
+    if len(value) > MAX_TITLE_LEN:
+        raise cv.Invalid(f"title must be at most {MAX_TITLE_LEN} characters")
+    return value
+
+
+def validate_message(value):
+    value = cv.string_strict(value)
+    if not value.strip():
+        raise cv.Invalid("message must not be empty")
+    if len(value) > MAX_MESSAGE_LEN:
+        raise cv.Invalid(
+            f"message must be at most {MAX_MESSAGE_LEN} characters "
+            "(Home Assistant's limit for an entity state)"
+        )
+    return value
+
+
 FAULT_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(Fault),
         cv.Required(CONF_CODE): validate_code,
         cv.Required(CONF_DESCRIPTION): validate_description,
+        # User-facing wording, published by the per-fault entities.
+        cv.Optional(CONF_TITLE): validate_title,
+        cv.Optional(CONF_MESSAGE): validate_message,
         cv.Required(CONF_SEVERITY): cv.enum(SEVERITIES, lower=True),
         cv.Required(CONF_CONDITION): cv.returning_lambda,
         cv.Optional(CONF_CLEAR_CONDITION): cv.returning_lambda,
@@ -153,15 +194,81 @@ def _text_sensor(icon):
     )
 
 
-CONFIG_SCHEMA = cv.Schema(
-    {
-        cv.GenerateID(): cv.declare_id(FaultMonitor),
-        cv.Required(CONF_FAULTS): cv.All(cv.ensure_list(FAULT_SCHEMA), validate_fault_list),
-        cv.Optional(CONF_REPORT): _text_sensor("mdi:alert-circle-outline"),
-        cv.Optional(CONF_CRITICAL_REPORT): _text_sensor("mdi:alert-octagon-outline"),
-        cv.Optional(CONF_SUMMARY): _text_sensor("mdi:shield-check-outline"),
-    }
-).extend(cv.polling_component_schema("1s"))
+def _add_fault_entities(config):
+    """With fault_entities: true, give every fault two generated entities:
+
+    - a binary sensor named after the fault's title, on while the fault is
+      active, whose device_class carries the severity (critical -> safety,
+      warning -> problem);
+    - a text sensor with the same name whose state is the fault's message.
+
+    Both share the name (so Home Assistant gives them the same object id in
+    the binary_sensor and sensor domains) and are diagnostic entities.
+    """
+    if not config[CONF_FAULT_ENTITIES]:
+        for i, f in enumerate(config[CONF_FAULTS]):
+            for key in (CONF_TITLE, CONF_MESSAGE):
+                if key in f:
+                    raise cv.Invalid(
+                        f"'{key}' is only used with fault_entities: true",
+                        path=[CONF_FAULTS, i, key],
+                    )
+        return config
+    titles = {}
+    for i, f in enumerate(config[CONF_FAULTS]):
+        for key in (CONF_TITLE, CONF_MESSAGE):
+            if key not in f:
+                raise cv.Invalid(
+                    f"fault_entities: true requires a '{key}' on every fault",
+                    path=[CONF_FAULTS, i],
+                )
+        if CONF_BINARY_SENSOR in f:
+            raise cv.Invalid(
+                "binary_sensor can't be combined with fault_entities: true "
+                "(the fault's status entity is generated)",
+                path=[CONF_FAULTS, i, CONF_BINARY_SENSOR],
+            )
+        key = f[CONF_TITLE].strip().lower()
+        if key in titles:
+            raise cv.Invalid(
+                f"Duplicate fault title '{f[CONF_TITLE]}' (also used by fault #{titles[key] + 1})",
+                path=[CONF_FAULTS, i, CONF_TITLE],
+            )
+        titles[key] = i
+        # cv.enum yields the validated key (a str subclass); compare as text.
+        critical = str(f[CONF_SEVERITY]) == "critical"
+        f[CONF_AUTO_STATUS] = binary_sensor.binary_sensor_schema(
+            binary_sensor.BinarySensor,
+            device_class=DEVICE_CLASS_SAFETY if critical else DEVICE_CLASS_PROBLEM,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        )({CONF_NAME: f[CONF_TITLE]})
+        f[CONF_AUTO_MESSAGE] = text_sensor.text_sensor_schema(
+            text_sensor.TextSensor,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            icon="mdi:clipboard-text-outline",
+        )({CONF_NAME: f[CONF_TITLE]})
+    return config
+
+
+CONFIG_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(FaultMonitor),
+            cv.Required(CONF_FAULTS): cv.All(cv.ensure_list(FAULT_SCHEMA), validate_fault_list),
+            cv.Optional(CONF_FAULT_ENTITIES, default=False): cv.boolean,
+            cv.Optional(CONF_REPORT): _text_sensor("mdi:alert-circle-outline"),
+            cv.Optional(CONF_CRITICAL_REPORT): _text_sensor("mdi:alert-octagon-outline"),
+            cv.Optional(CONF_SUMMARY): _text_sensor("mdi:shield-check-outline"),
+            cv.Optional(CONF_VERSION): _text_sensor("mdi:tag-outline"),
+            cv.Optional(CONF_ACKNOWLEDGEMENT_NEEDED): binary_sensor.binary_sensor_schema(
+                binary_sensor.BinarySensor,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:check-circle-outline",
+            ),
+        }
+    ).extend(cv.polling_component_schema("1s")),
+    _add_fault_entities,
+)
 
 
 def _final_validate(config):
@@ -224,16 +331,30 @@ async def to_code(config):
         if CONF_BINARY_SENSOR in conf:
             bs = await binary_sensor.new_binary_sensor(conf[CONF_BINARY_SENSOR])
             cg.add(fault.set_binary_sensor(bs))
+        if CONF_AUTO_STATUS in conf:
+            bs = await binary_sensor.new_binary_sensor(conf[CONF_AUTO_STATUS])
+            cg.add(fault.set_binary_sensor(bs))
+            msg = await text_sensor.new_text_sensor(conf[CONF_AUTO_MESSAGE])
+            cg.add(fault.set_message_sensor(msg))
+        if CONF_TITLE in conf:
+            cg.add(fault.set_title(conf[CONF_TITLE]))
+        if CONF_MESSAGE in conf:
+            cg.add(fault.set_message(conf[CONF_MESSAGE]))
         cg.add(var.add_fault(fault))
 
     for key, setter in (
         (CONF_REPORT, "set_report_sensor"),
         (CONF_CRITICAL_REPORT, "set_critical_report_sensor"),
         (CONF_SUMMARY, "set_summary_sensor"),
+        (CONF_VERSION, "set_version_sensor"),
     ):
         if key in config:
             sens = await text_sensor.new_text_sensor(config[key])
             cg.add(getattr(var, setter)(sens))
+    if CONF_ACKNOWLEDGEMENT_NEEDED in config:
+        bs = await binary_sensor.new_binary_sensor(config[CONF_ACKNOWLEDGEMENT_NEEDED])
+        cg.add(var.set_acknowledgement_needed_sensor(bs))
+    cg.add(var.set_version(COMPONENT_VERSION))
 
 
 # ---- Conditions -------------------------------------------------------------

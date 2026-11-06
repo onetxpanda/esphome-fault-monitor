@@ -5,3 +5,8 @@ bad_severity.yaml|Unknown value 'fatal'
 raise_after_too_short.yaml|is shorter than the monitor's update_interval
 empty_description.yaml|description must not be empty
 report_too_long.yaml|Home Assistant allows 255
+title_without_entities.yaml|'title' is only used with fault_entities: true
+entities_missing_message.yaml|fault_entities: true requires a 'message' on every fault
+duplicate_title.yaml|Duplicate fault title 'same'
+binary_sensor_with_entities.yaml|binary_sensor can't be combined with fault_entities: true
+message_too_long.yaml|message must be at most 255 characters

@@ -50,15 +50,31 @@ class Fault {
 #ifdef USE_BINARY_SENSOR
   void set_binary_sensor(binary_sensor::BinarySensor *s) { this->binary_sensor_ = s; }
 #endif
+#ifdef USE_TEXT_SENSOR
+  void set_message_sensor(text_sensor::TextSensor *s) { this->message_sensor_ = s; }
+#endif
+  void set_title(const char *title) { this->title_ = title; }
+  void set_message(const char *message) { this->message_ = message; }
 
   const char *get_code() const { return this->code_; }
   const char *get_description() const { return this->description_; }
+  /// User-facing title and message ("" when not configured).
+  const char *get_title() const { return this->title_; }
+  const char *get_message() const { return this->message_; }
   Severity get_severity() const { return this->severity_; }
   bool is_critical() const { return this->severity_ == Severity::CRITICAL; }
   /// Active = reported: raised and not yet cleared (includes latched).
   bool is_active() const { return this->logic_.active(); }
   bool is_latched() const { return this->logic_.latched(); }
   Phase get_phase() const { return this->logic_.phase(); }
+#ifdef USE_BINARY_SENSOR
+  /// The fault's status entity (generated or user-supplied), or nullptr.
+  binary_sensor::BinarySensor *get_binary_sensor() const { return this->binary_sensor_; }
+#endif
+#ifdef USE_TEXT_SENSOR
+  /// The generated message entity, or nullptr.
+  text_sensor::TextSensor *get_message_sensor() const { return this->message_sensor_; }
+#endif
 
  protected:
   friend class FaultMonitor;
@@ -74,6 +90,8 @@ class Fault {
 
   const char *code_;
   const char *description_;
+  const char *title_{""};
+  const char *message_{""};
   Severity severity_;
   FaultLogic logic_;
   std::function<std::optional<bool>()> condition_;
@@ -84,6 +102,9 @@ class Fault {
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *binary_sensor_{nullptr};
 #endif
+#ifdef USE_TEXT_SENSOR
+  text_sensor::TextSensor *message_sensor_{nullptr};
+#endif
 };
 
 class FaultMonitor : public PollingComponent {
@@ -93,7 +114,15 @@ class FaultMonitor : public PollingComponent {
   void set_report_sensor(text_sensor::TextSensor *s) { this->report_ = s; }
   void set_critical_report_sensor(text_sensor::TextSensor *s) { this->critical_report_ = s; }
   void set_summary_sensor(text_sensor::TextSensor *s) { this->summary_ = s; }
+  void set_version_sensor(text_sensor::TextSensor *s) { this->version_sensor_ = s; }
 #endif
+#ifdef USE_BINARY_SENSOR
+  void set_acknowledgement_needed_sensor(binary_sensor::BinarySensor *s) { this->ack_needed_ = s; }
+#endif
+  void set_version(const char *v) { this->version_ = v; }
+  const char *get_version() const { return this->version_; }
+  /// True while any fault is latched (waiting for acknowledgement).
+  bool any_latched() const;
 
   void setup() override;
   void update() override { this->evaluate(); }
@@ -126,7 +155,12 @@ class FaultMonitor : public PollingComponent {
   text_sensor::TextSensor *report_{nullptr};
   text_sensor::TextSensor *critical_report_{nullptr};
   text_sensor::TextSensor *summary_{nullptr};
+  text_sensor::TextSensor *version_sensor_{nullptr};
 #endif
+#ifdef USE_BINARY_SENSOR
+  binary_sensor::BinarySensor *ack_needed_{nullptr};
+#endif
+  const char *version_{""};
   ESPPreferenceObject pref_;
   uint32_t persisted_bits_{0};
   bool evaluating_{false};

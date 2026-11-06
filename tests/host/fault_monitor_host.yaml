@@ -45,11 +45,20 @@ fault_monitor:
   summary:
     name: "Fault Summary"
     id: summary
+  version:
+    name: "Fault Monitor Version"
+    id: version
+  acknowledgement_needed:
+    name: "Acknowledgement Needed"
+    id: ack_needed
+  fault_entities: true
   faults:
     # Hysteresis + interlock: raise at >= 35, clear below 32.2.
     - id: f_overheat
       code: enclosure_overheat
       description: "Enclosure at or above 35C; heater forced off"
+      title: "Enclosure overheating"
+      message: "The enclosure reached 35C, so the heater is off until it drops below 32.2C. Check the cooler."
       severity: critical
       condition: |-
         if (std::isnan(id(temp))) return {};
@@ -62,13 +71,12 @@ fault_monitor:
       while_active:
         - lambda: |-
             if (id(heater_on)) { id(heater_on) = false; ESP_LOGI("test", "interlock: heater forced off"); }
-      binary_sensor:
-        name: "Overheat"
-        id: overheat_bs
     # Time-qualified, unknown = hold.
     - id: f_cold
       code: enclosure_too_cold
       description: "Below 21C for 3 s"
+      title: "Enclosure too cold"
+      message: "The enclosure has been below 21C. Check the heater."
       severity: critical
       raise_after: 3s
       clear_after: 2s
@@ -79,6 +87,8 @@ fault_monitor:
     - id: f_no_temp
       code: no_temperature
       description: "No temperature reading"
+      title: "No temperature"
+      message: "No temperature reading. Check the sensor."
       severity: warning
       raise_after: 2s
       unknown: raise
@@ -89,6 +99,8 @@ fault_monitor:
     - id: f_bus
       code: power_meter_fault
       description: "Bus returned implausible readings"
+      title: "Power meter fault"
+      message: "The power meter returned bad readings. Check the wiring, then acknowledge."
       severity: warning
       latch: true
       startup_delay: 2s
@@ -134,6 +146,24 @@ interval:
           then:
             - lambda: 'ESP_LOGD("test", "condition: some critical active");'
       - lambda: |-
-          ESP_LOGI("test", "STATE step=%d report=%s critical=%s summary=%s heater=%d raises=%d",
+          ESP_LOGI("test", "STATE step=%d report=%s critical=%s summary=%s heater=%d raises=%d ack=%d",
                    id(step), id(report).state.c_str(), id(critical_report).state.c_str(),
-                   id(summary).state.c_str(), (int) id(heater_on), id(on_raise_count));
+                   id(summary).state.c_str(), (int) id(heater_on), id(on_raise_count),
+                   (int) (id(ack_needed).has_state() && id(ack_needed).state));
+          if (id(step) == 2) {
+            ESP_LOGI("test", "VERSION %s", id(version).state.c_str());
+            for (auto *f : id(monitor).get_faults()) {
+              auto *bs = f->get_binary_sensor();
+              auto *ms = f->get_message_sensor();
+              char dc[esphome::MAX_DEVICE_CLASS_LENGTH];
+              ESP_LOGI("test", "ENTITY code=%s name=%s device_class=%s state=%d message=%s",
+                       f->get_code(), bs ? bs->get_name().c_str() : "-",
+                       bs ? bs->get_device_class_to(dc) : "-",
+                       bs && bs->has_state() ? (int) bs->state : -1,
+                       ms && ms->has_state() ? ms->state.c_str() : "-");
+            }
+          }
+          if (id(step) == 4) {
+            auto *bs = id(monitor).get_faults()[0]->get_binary_sensor();
+            ESP_LOGI("test", "OVERHEAT_ENTITY state=%d", bs && bs->has_state() ? (int) bs->state : -1);
+          }

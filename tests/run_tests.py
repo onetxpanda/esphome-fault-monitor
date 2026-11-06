@@ -50,7 +50,7 @@ def invalid_configs(esphome):
 
 
 STATE_RE = re.compile(
-    r"STATE step=(\d+) report=(\S+) critical=(\S+) summary=(\S+) heater=(\d) raises=(\d+)"
+    r"STATE step=(\d+) report=(\S+) critical=(\S+) summary=(\S+) heater=(\d) raises=(\d+) ack=(\d)"
 )
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -70,6 +70,7 @@ def run_phase(program, prefdir, seconds, sig):
             "summary": m.group(4),
             "heater": int(m.group(5)),
             "raises": int(m.group(6)),
+            "ack": int(m.group(7)),
         }
     return out, states
 
@@ -103,6 +104,18 @@ def host_test(esphome, skip_compile):
         check(g(29, "report") == "power_meter_fault", "latching fault raised")
         check(g(31, "report") == "power_meter_fault" and "LATCHED until acknowledged" in out, "fault latched after its condition cleared")
         check(g(29, "critical") == "OK" and g(29, "summary") == "warning", "warning does not appear in the critical report")
+        # Per-fault entities (fault_entities: true)
+        check("VERSION 1.1.0" in out, "version sensor reports 1.1.0")
+        ent = dict(re.findall(r"ENTITY code=(\S+) (name=.*)", out))
+        def e(code):
+            return ent.get(code, "")
+        check("name=Enclosure overheating device_class=safety state=0" in e("enclosure_overheat"),
+              "critical fault: status entity named by title, device_class safety, initially off")
+        check("device_class=problem" in e("no_temperature") and "device_class=problem" in e("power_meter_fault"),
+              "warning faults: device_class problem")
+        check("message=The enclosure reached 35C" in e("enclosure_overheat"), "message entity published at boot")
+        check("OVERHEAT_ENTITY state=1" in out, "status entity on while the fault is active")
+        check(g(29, "ack") == 0 and g(31, "ack") == 1, "acknowledgement-needed only while latched")
 
         # Phase 2: restart. The latched fault must be restored and reported.
         out, s = run_phase(program, prefdir, 37, signal.SIGINT)
@@ -112,6 +125,7 @@ def host_test(esphome, skip_compile):
         check(g(4, "report") == "enclosure_overheat,power_meter_fault", "report lists critical first, then warnings")
         check("[power_meter_fault] acknowledged" in out, "acknowledge action cleared the latched fault")
         check(g(34, "report") == "OK", "report OK after acknowledgement")
+        check(g(1, "ack") == 1 and g(34, "ack") == 0, "acknowledgement-needed restored after reboot, cleared by acknowledge")
 
         # Phase 3: restart again. The acknowledgement must have been persisted.
         out, s = run_phase(program, prefdir, 4, signal.SIGINT)

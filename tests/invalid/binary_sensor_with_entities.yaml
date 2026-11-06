@@ -1,0 +1,12 @@
+esphome:
+  name: invalid-test
+host:
+logger:
+external_components:
+  - source: {type: local, path: ../../components}
+    components: [fault_monitor]
+fault_monitor:
+  update_interval: 1s
+  fault_entities: true
+  faults:
+    - {code: a_fault, description: "x", title: "A", message: "m", severity: warning, condition: "return false;", binary_sensor: {name: "B"}}

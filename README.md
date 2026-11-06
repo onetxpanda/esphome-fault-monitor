@@ -12,7 +12,7 @@ safety-relevant controllers (an animal-enclosure thermostat), where:
 
 ```yaml
 external_components:
-  - source: github://onetxpanda/esphome-fault-monitor@v1.0.0
+  - source: github://onetxpanda/esphome-fault-monitor@v1.1.0
     components: [fault_monitor]
 ```
 
@@ -80,7 +80,18 @@ climate:
 | `on_raise` | | Automation, run once when the fault is raised. |
 | `on_clear` | | Automation, run once when the fault clears (or is acknowledged). |
 | `while_active` | | Automation, run on every evaluation while the fault is active. |
-| `binary_sensor` | | Optional per-fault binary sensor (`device_class: problem`). |
+| `title` | | User-facing name of the fault (max 60 characters, unique). Required with `fault_entities: true`. |
+| `message` | | User-facing explanation and what to check (max 255 characters). Required with `fault_entities: true`. |
+| `binary_sensor` | | Optional hand-configured per-fault binary sensor (`device_class: problem`). Not allowed with `fault_entities: true`. |
+
+### Monitor options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `fault_entities` | `false` | Generate the per-fault entities described under **Entity contract**. |
+| `report` / `critical_report` / `summary` | | Compact text reports, described under **Report contract**. |
+| `acknowledgement_needed` | | Binary sensor, on while any fault is latched. Use it to show an acknowledge button. |
+| `version` | | Text sensor with the component version (`1.1.0`), so a consumer can tell which contract a device implements. |
 
 The `update_interval` (default `1s`) is how often every fault is evaluated. A
 non-zero `raise_after` or `clear_after` shorter than it is rejected.
@@ -155,6 +166,23 @@ schedules one more pass, bounded to 3 passes.
 - `summary`: `ok`, `warning` or `critical`.
 - Reports are published at boot (restored state), on every change, and are
   never stale.
+
+## Entity contract (`fault_entities: true`)
+
+ESPHome entities carry a single typed value and no attributes, so each fault
+is published as a pair of entities that share the fault's `title` as their name:
+
+| Entity | State | Carries |
+|---|---|---|
+| `binary_sensor` named *title* | `on` while the fault is active (including latched) | Severity as `device_class`: `safety` for critical, `problem` for warning |
+| `text_sensor` named *title* | The fault's `message`, published at boot | The user-facing wording |
+
+Both are diagnostic entities. Because they share a name, Home Assistant gives
+them the same object id in the `binary_sensor` and `sensor` domains, so a
+consumer can pair them without any per-fault configuration: for each fault
+binary sensor on the device, its message is `sensor.<same object id>`.
+Adding a fault to the firmware is enough for it to appear in Home Assistant
+with its severity and wording.
 
 ## Conditions and actions
 
